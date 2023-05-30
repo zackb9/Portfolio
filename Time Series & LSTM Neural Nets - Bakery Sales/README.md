@@ -1,6 +1,8 @@
-# Group project for STAT222 course
+# Capstone Project
 
-The structure of the repository is the folloing: 
+Using time series analysis, linear regression and long short-term memory neural networks to predict sales figures for bakeries in France.
+
+The structure of the repository is the following: 
 
 ```bash
 .
