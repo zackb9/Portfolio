@@ -1,0 +1,699 @@
+---
+title: "230 Project"
+output: pdf_document
+author: "Zack Brodtman"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Feature Engineering and Data Cleaning
+
+```{r include=FALSE}
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(glmnet)
+library(fastDummies)
+library(RColorBrewer)
+library(corrplot)
+library(GGally)
+library(Metrics)
+library(caret)
+library(e1071)
+library(MASS)
+library(pls)
+
+```
+
+```{r}
+rsq <- function(y, y_hat) {
+    1 - sum((y - y_hat)^2) / sum((y - mean(y))^2)
+}
+
+
+# Read in the dataset
+ames_data <- read.csv("/Users/zackbrodtman/Downloads/AmesHousing.csv.xls")
+
+# Histogram of SalePrice
+hist(x=ames_data$SalePrice, xlab = 'Sale Price', breaks = 50, col = '#ADD8E6', main =NULL)
+
+# Histogram of log(SalePrice)
+hist(x=log(ames_data$SalePrice), xlab = 'log(Sale Price)', breaks = 50, col = '#ADD8E6', main = NULL)
+
+# Use log so that outliers have less impact on model
+ames_data$LogSalePrice = log(ames_data$SalePrice)
+
+# Add age and years since built/garage added
+ames_data$Age.At.Sale <- ames_data$Yr.Sold - ames_data$Year.Built
+ames_data$Years.Since.Remod <- ames_data$Yr.Sold - ames_data$Year.Remod.Add
+ames_data$Years.Since.Garage <- ames_data$Yr.Sold - ames_data$Garage.Yr.Blt
+ames_data <- subset(ames_data, select =-c(Year.Built, Year.Remod.Add, Garage.Yr.Blt, SalePrice, Order, PID))
+
+# Convert month, year sold to categorical data and fix bath field
+ames_data$Mo.Sold <- as.character(ames_data$Mo.Sold)
+ames_data$Yr.Sold <- as.character(ames_data$Yr.Sold)
+ames_data$Bsmt.Full.Bath <- as.numeric(ames_data$Bsmt.Full.Bath)
+ames_data$Bsmt.Half.Bath <- as.numeric(ames_data$Bsmt.Half.Bath)
+
+
+
+# Replace null values with "Missing" for categorical data and 0 for numerical data
+ames_data$Alley[is.na(ames_data$Alley)] = "Missing"
+ames_data$Bsmt.Qual[is.na(ames_data$Bsmt.Qual)] = "Missing"
+ames_data$Bsmt.Cond[is.na(ames_data$Bsmt.Cond)] = "Missing"
+ames_data$Bsmt.Exposure[is.na(ames_data$Bsmt.Exposure)] = "Missing"
+ames_data$BsmtFin.Type.1[is.na(ames_data$BsmtFin.Type.1)] = "Missing"
+ames_data$BsmtFin.Type.2[is.na(ames_data$BsmtFin.Type.2)] = "Missing"
+ames_data$Fireplace.Qu[is.na(ames_data$Fireplace.Qu)] = "Missing"
+ames_data$Garage.Qual[is.na(ames_data$Garage.Qual)] = "Missing"
+ames_data$Garage.Cond[is.na(ames_data$Garage.Cond)] = "Missing"
+ames_data$Garage.Type[is.na(ames_data$Garage.Type)] = "Missing"
+ames_data$Garage.Finish[is.na(ames_data$Garage.Finish)] = "Missing"
+ames_data$Pool.QC[is.na(ames_data$Pool.QC)] = "Missing"
+ames_data$Fence[is.na(ames_data$Fence)] = "Missing"
+ames_data$Misc.Feature[is.na(ames_data$Misc.Feature)] = "Missing"
+ames_data$Lot.Frontage[is.na(ames_data$Lot.Frontage)] = 0
+ames_data$Mas.Vnr.Area[is.na(ames_data$Mas.Vnr.Area)] = 0
+ames_data$BsmtFin.SF.1[is.na(ames_data$BsmtFin.SF.1)] = 0
+ames_data$BsmtFin.SF.2[is.na(ames_data$BsmtFin.SF.2)] = 0
+ames_data$Bsmt.Unf.SF[is.na(ames_data$Bsmt.Unf.SF)] = 0
+ames_data$Total.Bsmt.SF[is.na(ames_data$Total.Bsmt.SF)] = 0
+ames_data$Garage.Cars[is.na(ames_data$Garage.Cars)] = 0
+ames_data$Garage.Area[is.na(ames_data$Garage.Area)] = 0
+ames_data$Years.Since.Garage[is.na(ames_data$Years.Since.Garage)] = 0
+ames_data$Bsmt.Full.Bath[is.na(ames_data$Bsmt.Full.Bath)] = 0
+ames_data$Bsmt.Half.Bath[is.na(ames_data$Bsmt.Half.Bath)] = 0
+
+# Pairwise correllation
+
+# Select only the numeric columns
+ames_data_numeric <- select_if(ames_data, is.numeric)
+
+# Calculate the correlation matrix
+cor_matrix <- cor(ames_data_numeric)
+
+find_high_cor_pairs <- function(cor_matrix) {
+  # Set the diagonal to 0
+  diag(cor_matrix) <- 0
+  
+  # Calculate absolute correlation matrix
+  abs_cor_matrix <- abs(cor_matrix)
+  
+  # Get the row and column indices of the high correlation pairs
+  high_cor_pairs <- which(abs_cor_matrix > 0.80 & abs_cor_matrix < 1, arr.ind = TRUE)
+  
+  # Create a dataframe to store the pairs and their correlations
+  cor_df <- data.frame(Variable_1 = rownames(cor_matrix)[high_cor_pairs[,1]],
+                       Variable_2 = colnames(cor_matrix)[high_cor_pairs[,2]],
+                       Correlation = cor_matrix[high_cor_pairs])
+  
+  # Sort the dataframe by correlation in descending order
+  cor_df <- cor_df[order(-abs(cor_df$Correlation)),]
+  
+  # Return the dataframe
+  cor_df
+}
+
+# Call the function with the correlation matrix
+find_high_cor_pairs(cor_matrix)
+
+# Graphical representation
+ggcorr(ames_data_numeric)
+
+# Garage Area and Garage Cars highly correllated
+# as are Total Rooms Above Grade and Above Grade Living Area
+# and First Floor SF and Basement SF. Lets remove Total Rooms Above Grade, Total Basement SF and Garage Cars.
+ames_data <- subset(ames_data, select =-c(TotRms.AbvGrd, Garage.Cars, Total.Bsmt.SF))
+
+# We also notice which variables are positively correllated with LogSalePrice: Garage Area, Ground Living Area, First Floor SF, Fireplaces, Full Baths, Porch/Deck SF
+# and which are negatively correllated: Age at sale, Years Since remodelling
+```
+
+
+# EDA
+
+```{r}
+# Quality and condition linear relationship with log(SalePrice)
+par(mfrow=c(1,2), mar=c(4,4,2,1), oma=c(0,0,2,0), cex.lab=1.2, cex.axis=1.2, mgp=c(2,0.6,0))
+boxplot(LogSalePrice ~ Overall.Qual, data = ames_data, xlab = "Overall Quality", ylab = "log(Sale Price)", col = '#ADD8E6')
+abline(lm(LogSalePrice ~ Overall.Qual, data = ames_data), col="blue")
+
+boxplot(LogSalePrice ~ Overall.Cond, data = ames_data, xlab = "Overall Condition", ylab = "")
+mtext("Log(Sale Price)", side=2, line=2.5)
+
+# Nonlinear relationships
+par(mfrow=c(3,3), figsize=c(15,15))
+with(ames_data, {
+  plot(Lot.Frontage, LogSalePrice, main="LotFrontage vs LogSalePrice")
+  abline(lm(LogSalePrice ~ Lot.Frontage), col="blue")
+  plot(Overall.Qual, LogSalePrice, main=NULL, xlab = 'Overall Quality', ylab = 'log(Sale Price)', col = '#ADD8E6')
+  abline(lm(LogSalePrice ~ Overall.Qual), col="blue")
+  plot(Overall.Cond, LogSalePrice, main=NULL, xlab = 'Overall Condition', ylab = 'log(Sale Price)', col = '#ADD8E6')
+  abline(lm(LogSalePrice ~ Overall.Cond), col="blue")
+  plot(Lot.Area, LogSalePrice, main="LotArea vs LogSalePrice", xlab = 'Lot Area', ylab = 'log(Sale Price)', col = '#ADD8E6')
+  abline(lm(LogSalePrice ~ Lot.Area), col="blue")
+  plot(Mas.Vnr.Area, LogSalePrice, main="MasVnrArea vs LogSalePrice")
+  abline(lm(LogSalePrice ~ Mas.Vnr.Area), col="blue")
+  plot(X1st.Flr.SF, LogSalePrice, main="X1stFlrSF vs LogSalePrice")
+  abline(lm(LogSalePrice ~ X1st.Flr.SF), col="blue")
+  plot(X2nd.Flr.SF, LogSalePrice, main=NULL, xlab = 'Second Floor Area (SF)', ylab = 'log(Sale Price)', col = '#ADD8E6')
+  abline(lm(LogSalePrice ~ X2nd.Flr.SF), col="blue")
+  plot(Pool.Area, LogSalePrice, main="PoolArea vs LogSalePrice")
+  abline(lm(LogSalePrice ~ Pool.Area), col="blue")
+  plot(Garage.Area, LogSalePrice,main=NULL, xlab = 'Garage Area (SF)', ylab = 'log(Sale Price)', col = '#ADD8E6')
+  abline(lm(LogSalePrice ~ Garage.Area), col="blue")
+})
+
+
+# Discrete
+#par(mfrow=c(4,4), mar=c(5,5,3,1), oma=c(2,2,0,0), 
+#    fig=c(0,1,0,1), cex.lab=1.2, cex.main=1.2, cex.axis=1.2)
+#boxplot(LogSalePrice ~ Bsmt.Full.Bath, data=ames_data, 
+#        xlab="Bsmt Full Bath", ylab="Log Sale Price")
+#boxplot(LogSalePrice ~ Bsmt.Half.Bath, data=ames_data, 
+#        xlab="Bsmt Half Bath", ylab="Log Sale Price")
+#boxplot(LogSalePrice ~ Full.Bath, data=ames_data, 
+#        xlab="Full Bath", ylab="Log Sale Price")
+#boxplot(LogSalePrice ~ Half.Bath, data=ames_data, 
+#        xlab="Half Bath", ylab="Log Sale Price")
+#boxplot(LogSalePrice ~ Bedroom.AbvGr, data=ames_data, 
+#        xlab="Bedroom Above Grade", ylab="Log Sale Price")
+#boxplot(LogSalePrice ~ Kitchen.AbvGr, data=ames_data, 
+#        xlab="Kitchen Above Grade", ylab="Log Sale Price")
+#boxplot(LogSalePrice ~ Fireplaces, data=ames_data, 
+#        xlab="Fireplaces", ylab="log(Sale Price)", col = '#ADD8E6')
+#abline(lm(LogSalePrice ~ Fireplaces, data = ames_data), col="blue")
+
+
+barplot(table(ames_data$Age.At.Sale), 
+        main = "How old are houses at sale?", 
+        xlab = "Years",
+        ylab = "Number of houses",
+        col = brewer.pal(9, "Greens"))
+
+ggplot(ames_data, aes(x = Gr.Liv.Area)) +
+  geom_histogram(color = "black", fill = "green", bins = 60) + 
+  labs(title = "Distribution of house sizes", x = "Living area (sqft)", y = "Frequency") +
+  theme_minimal() 
+
+# We see which variables have a nonlinear relationship with LogSalePrice: LotArea, TotalBsmtSF, X1st.Flr.SF
+
+```
+
+# Regression analysis
+
+
+```{r}
+
+
+# Encode categorical variables
+vars_to_encode <- c("MS.Zoning", "Street", "Alley", "Lot.Shape", "Land.Contour", 
+                    "Utilities", "Lot.Config", "Land.Slope", "Neighborhood", "Condition.1", 
+                    "Condition.2", "Bldg.Type", "House.Style", 
+                    "Roof.Style", "Exterior.1st", "Exterior.2nd", "Mas.Vnr.Type", 
+                    "Exter.Qual", "Exter.Cond", "Foundation", "Bsmt.Qual", "Bsmt.Cond", 
+                    "Bsmt.Exposure", "BsmtFin.Type.1", "BsmtFin.Type.2", "Heating", "Heating.QC", 
+                    "Central.Air", "Electrical",  "Kitchen.Qual", 
+                    "Functional", "Fireplace.Qu", "Garage.Type", "Garage.Finish", 
+                     "Garage.Qual", "Garage.Cond", "Paved.Drive", "Pool.QC", "Fence", "Misc.Feature",
+                     "Misc.Val", "Mo.Sold", "Sale.Type", "Sale.Condition", "Roof.Matl")
+
+ames_data_encoded <- dummy_cols(ames_data, select_columns =  vars_to_encode, remove_first_dummy = TRUE, remove_selected_columns = TRUE)
+all = 'LogSalePrice ~ .  - BsmtFin.SF.1 - Overall.Qual -Gr.Liv.Area- X1st.Flr.SF'
+# After encoding variables, we have ~400 variables and ~2000 observations so p is almost equal to n. This is an issue as we are in danger of overfitting
+
+#Box Plots show stable data across all years so we can split by year
+ggplot(data=ames_data, aes(x=factor(Yr.Sold), y=LogSalePrice)) + 
+  geom_boxplot() +
+  labs(title=NULL, x="Year Sold", y="LogSalePrice") +
+  theme_bw()
+
+# Split train/test by year
+train <- ames_data_encoded[ames_data_encoded$Yr.Sold==2006 | ames_data_encoded$Yr.Sold==2007  | ames_data_encoded$Yr.Sold==2008,]
+test <- ames_data_encoded[  ames_data_encoded$Yr.Sold==2010|ames_data_encoded$Yr.Sold==2009,]
+
+train <- subset(train, select =-Yr.Sold)
+test <- subset(test, select =-Yr.Sold)
+
+# Fit a linear model on all the features
+model_full <- lm(formula = all, data = train)
+
+# Evaluate the model on the test set
+predictions_full <- predict(model_full, newdata = test)
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_full <- rsq(test$LogSalePrice, predictions_full)
+mae_full <- mae(exp(test$LogSalePrice), exp(predictions_full))
+rmse_full <- rmse(exp(test$LogSalePrice), exp(predictions_full))
+
+paste('OSR^2:', rsq_full, 'MAE:', mae_full, 'RMSE:', rmse_full)
+
+#anova(model_full)
+
+```
+
+# Intuitive Model
+
+```{r}
+# Fit a model that a non-technical person might fit based on their intuition about property prices
+
+model_int <- lm(LogSalePrice ~  Neighborhood_Blueste + Neighborhood_BrDale + 
+    Neighborhood_BrkSide + Neighborhood_ClearCr + Neighborhood_CollgCr + 
+    Neighborhood_Crawfor + Neighborhood_Edwards + Neighborhood_Gilbert + 
+    Neighborhood_Greens + Neighborhood_GrnHill + Neighborhood_IDOTRR + 
+    Neighborhood_Landmrk + Neighborhood_MeadowV + Neighborhood_Mitchel + 
+    Neighborhood_NAmes + Neighborhood_NoRidge + Neighborhood_NPkVill + 
+    Neighborhood_NridgHt + Neighborhood_NWAmes + Neighborhood_OldTown + 
+    Neighborhood_Sawyer + Neighborhood_SawyerW + Neighborhood_Somerst + 
+    Neighborhood_StoneBr + Neighborhood_SWISU + Neighborhood_Timber + 
+    Neighborhood_Veenker +  Gr.Liv.Area + Age.At.Sale +
+    Overall.Qual+ Years.Since.Remod + Pool.Area 
+    , data = train)
+
+# Evaluate the model on the test set
+predictions_int <- predict(model_int, newdata = test)
+
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_int <- rsq(test$LogSalePrice, predictions_int)
+mae_int <- mae(exp(test$LogSalePrice), exp(predictions_int))
+rmse_int <- rmse(exp(test$LogSalePrice), exp(predictions_int))
+
+paste('OSR^2:', rsq_int, 'MAE:', mae_int, 'RMSE:', rmse_int)
+```
+
+
+# Add polynomials
+
+
+```{r}
+
+
+# columns for polynomial terms:
+# "Lot.Area", "X1st.Flr.SF", "X2nd.Flr.SF",
+# "Gr.Liv.Area", "Garage.Area", "Pool.Area"
+
+ames_data_encoded$Lot.Area_poly <- (ames_data_encoded$Lot.Area)**2
+ames_data_encoded$X1st.Flr.SF_poly <- (ames_data_encoded$X1st.Flr.SF)**2
+ames_data_encoded$X2nd.Flr.SF_poly <- (ames_data_encoded$X2nd.Flr.SF)**2
+ames_data_encoded$Gr.Liv.Area_poly <- (ames_data_encoded$Gr.Liv.Area)**2
+ames_data_encoded$Garage.Area_poly <- (ames_data_encoded$Garage.Area)**2
+ames_data_encoded$Pool.Area_poly <- (ames_data_encoded$Pool.Area)**2
+
+
+
+# same train/test split
+train_poly <- ames_data_encoded[ames_data_encoded$Yr.Sold==2006 | ames_data_encoded$Yr.Sold==2007 | ames_data_encoded$Yr.Sold==2008,]
+test_poly <- ames_data_encoded[ ames_data_encoded$Yr.Sold==2010 | ames_data_encoded$Yr.Sold==2009 ,]
+
+train_poly <- subset(train_poly, select =-Yr.Sold)
+test_poly <- subset(test_poly, select =-Yr.Sold)
+
+# Fit a linear model on all the features
+model_full_poly <- lm(formula = all, data = train_poly)
+#summary(model_full_poly)
+
+# Evaluate the model on the test set
+predictions_full_poly <- predict(model_full_poly, newdata = test_poly)
+
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_full_poly <- rsq(test_poly$LogSalePrice, predictions_full_poly)
+mae_full_poly <- mae(exp(test_poly$LogSalePrice), exp(predictions_full_poly))
+rmse_full_poly <- rmse(exp(test_poly$LogSalePrice), exp(predictions_full_poly))
+
+paste('OSR^2:', rsq_full_poly, 'MAE:', mae_full_poly, 'RMSE:', rmse_full_poly)
+```
+
+
+# interaction neighborhood & quality, age at sale & exterior material quality, 
+
+```{r}
+
+# List of neighborhood dummy variables
+neighborhood_vars <- c("Neighborhood_Blueste", "Neighborhood_BrDale", "Neighborhood_BrkSide", "Neighborhood_ClearCr", 
+                       "Neighborhood_CollgCr", "Neighborhood_Crawfor", "Neighborhood_Edwards", "Neighborhood_Gilbert", 
+                       "Neighborhood_Greens", "Neighborhood_GrnHill", "Neighborhood_IDOTRR", "Neighborhood_Landmrk", 
+                       "Neighborhood_MeadowV", "Neighborhood_Mitchel", "Neighborhood_NAmes", "Neighborhood_NoRidge", 
+                       "Neighborhood_NPkVill", "Neighborhood_NridgHt", "Neighborhood_NWAmes", "Neighborhood_OldTown", 
+                       "Neighborhood_Sawyer", "Neighborhood_SawyerW", "Neighborhood_Somerst", "Neighborhood_StoneBr", 
+                       "Neighborhood_SWISU", "Neighborhood_Timber", "Neighborhood_Veenker")
+
+# List of OverallQual dummy variables
+overall_qual_vars <- c("Overall.Qual", "Overall.Cond")
+
+# Create a matrix with all combinations of neighborhood and overall quality variables
+interaction_matrix <- outer(neighborhood_vars, overall_qual_vars, paste, sep="*")
+
+# Flatten the matrix to a single vector
+interaction_vector <- c(interaction_matrix)
+
+# Join all interactions with "+" sign
+interaction_formula <- paste(interaction_vector, collapse=" + ")
+
+
+model_interact <- lm(LogSalePrice ~ . + Neighborhood_Blueste*Lot.Area + Neighborhood_BrDale*Lot.Area + Neighborhood_BrkSide*Lot.Area + Neighborhood_ClearCr*Lot.Area + Neighborhood_CollgCr*Lot.Area + Neighborhood_Crawfor*Lot.Area + Neighborhood_Edwards*Lot.Area + Neighborhood_Gilbert*Lot.Area + Neighborhood_Greens*Lot.Area + Neighborhood_GrnHill*Lot.Area + Neighborhood_IDOTRR*Lot.Area + Neighborhood_Landmrk*Lot.Area + Neighborhood_MeadowV*Lot.Area + Neighborhood_Mitchel*Lot.Area + Neighborhood_NAmes*Lot.Area + Neighborhood_NoRidge*Lot.Area + Neighborhood_NPkVill*Lot.Area + Neighborhood_NridgHt*Lot.Area + Neighborhood_NWAmes*Lot.Area + Neighborhood_OldTown*Lot.Area + Neighborhood_Sawyer*Lot.Area + Neighborhood_SawyerW*Lot.Area + Neighborhood_Somerst*Lot.Area + Neighborhood_StoneBr*Lot.Area + Neighborhood_SWISU*Lot.Area + Neighborhood_Timber*Lot.Area + Neighborhood_Veenker*Lot.Area + Neighborhood_Blueste*X1st.Flr.SF + Neighborhood_BrDale*X1st.Flr.SF + Neighborhood_BrkSide*X1st.Flr.SF + Neighborhood_ClearCr*X1st.Flr.SF + Neighborhood_CollgCr*X1st.Flr.SF + Neighborhood_Crawfor*X1st.Flr.SF + Neighborhood_Edwards*X1st.Flr.SF + Neighborhood_Gilbert*X1st.Flr.SF + Neighborhood_Greens*X1st.Flr.SF + Neighborhood_GrnHill*X1st.Flr.SF + Neighborhood_IDOTRR*X1st.Flr.SF + Neighborhood_Landmrk*X1st.Flr.SF + Neighborhood_MeadowV*X1st.Flr.SF + Neighborhood_Mitchel*X1st.Flr.SF + Neighborhood_NAmes*X1st.Flr.SF + Neighborhood_NoRidge*X1st.Flr.SF + Neighborhood_NPkVill*X1st.Flr.SF + Neighborhood_NridgHt*X1st.Flr.SF + Neighborhood_NWAmes*X1st.Flr.SF + Neighborhood_OldTown*X1st.Flr.SF + Neighborhood_Sawyer*X1st.Flr.SF + Neighborhood_SawyerW*X1st.Flr.SF + Neighborhood_Somerst*X1st.Flr.SF + Neighborhood_StoneBr*X1st.Flr.SF + Neighborhood_SWISU*X1st.Flr.SF + Neighborhood_Timber*X1st.Flr.SF + Neighborhood_Veenker*X1st.Flr.SF + - BsmtFin.SF.1 - Overall.Qual -Gr.Liv.Area- X1st.Flr.SF +Age.At.Sale*Exter.Qual_Fa + Age.At.Sale*Exter.Qual_Gd + Age.At.Sale*Exter.Qual_TA+
+Neighborhood_Blueste*Overall.Qual + Neighborhood_BrDale*Overall.Qual + Neighborhood_BrkSide*Overall.Qual + Neighborhood_ClearCr*Overall.Qual + Neighborhood_CollgCr*Overall.Qual + Neighborhood_Crawfor*Overall.Qual + Neighborhood_Edwards*Overall.Qual + Neighborhood_Gilbert*Overall.Qual + Neighborhood_Greens*Overall.Qual + Neighborhood_GrnHill*Overall.Qual + Neighborhood_IDOTRR*Overall.Qual + Neighborhood_Landmrk*Overall.Qual + Neighborhood_MeadowV*Overall.Qual + Neighborhood_Mitchel*Overall.Qual + Neighborhood_NAmes*Overall.Qual + Neighborhood_NoRidge*Overall.Qual + Neighborhood_NPkVill*Overall.Qual + Neighborhood_NridgHt*Overall.Qual + Neighborhood_NWAmes*Overall.Qual + Neighborhood_OldTown*Overall.Qual + Neighborhood_Sawyer*Overall.Qual + Neighborhood_SawyerW*Overall.Qual + Neighborhood_Somerst*Overall.Qual + Neighborhood_StoneBr*Overall.Qual + Neighborhood_SWISU*Overall.Qual + Neighborhood_Timber*Overall.Qual + Neighborhood_Veenker*Overall.Qual + Neighborhood_Blueste*Overall.Cond + Neighborhood_BrDale*Overall.Cond + Neighborhood_BrkSide*Overall.Cond + Neighborhood_ClearCr*Overall.Cond + Neighborhood_CollgCr*Overall.Cond + Neighborhood_Crawfor*Overall.Cond + Neighborhood_Edwards*Overall.Cond + Neighborhood_Gilbert*Overall.Cond + Neighborhood_Greens*Overall.Cond + Neighborhood_GrnHill*Overall.Cond + Neighborhood_IDOTRR*Overall.Cond + Neighborhood_Landmrk*Overall.Cond + Neighborhood_MeadowV*Overall.Cond + Neighborhood_Mitchel*Overall.Cond + Neighborhood_NAmes*Overall.Cond + Neighborhood_NoRidge*Overall.Cond + Neighborhood_NPkVill*Overall.Cond + Neighborhood_NridgHt*Overall.Cond + Neighborhood_NWAmes*Overall.Cond + Neighborhood_OldTown*Overall.Cond + Neighborhood_Sawyer*Overall.Cond + Neighborhood_SawyerW*Overall.Cond + Neighborhood_Somerst*Overall.Cond + Neighborhood_StoneBr*Overall.Cond + Neighborhood_SWISU*Overall.Cond + Neighborhood_Timber*Overall.Cond + Neighborhood_Veenker*Overall.Cond, 
+data = train)
+
+# Evaluate the model on the test set
+
+predictions_interact <- predict(model_interact, newdata = test)
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_interact <- rsq(test$LogSalePrice, predictions_interact)
+mae_interact <- mae(exp(test$LogSalePrice), exp(predictions_interact))
+rmse_interact <- rmse(exp(test$LogSalePrice), exp(predictions_interact))
+
+paste('OSR^2:', rsq_interact, 'MAE:', mae_interact, 'RMSE:', rmse_interact)
+
+```
+
+
+# Principal component regression
+
+```{r}
+
+# Perform principal component regression using train_poly and test_poly to predict LogSalePrice
+set.seed(123) # for reproducibility
+
+library(pls)
+
+# Remove columns with low standard deviation
+train_pca <- train_poly[, apply(train_poly, 2, sd) > 0.05]
+test_pca <- test_poly[, apply(train_poly, 2, sd) > 0.05]
+
+# Perform PCA
+pca <- prcomp(subset(train_pca, select = -LogSalePrice), scale. = TRUE)
+
+# Transform train and test data using PCA
+train_pca <- data.frame(predict(pca, subset(train_pca, select = -LogSalePrice)))
+test_pca <- data.frame(predict(pca, subset(test_pca, select = -LogSalePrice)))
+train_pca$LogSalePrice = train_poly$LogSalePrice
+test_pca$LogSalePrice = test_poly$LogSalePrice
+train_pca <- train_pca %>% relocate(LogSalePrice)
+test_pca <- test_pca %>% relocate(LogSalePrice)
+
+# Create scree plot
+screeplot(pca, npcs = 150, xlab = "Principal Component")
+
+# Fit linear regression model with 40 principal components
+model <- lm(LogSalePrice ~ ., data = train_pca[,1:190])
+
+# Make predictions on test data
+predictions_pca <- predict(model, newdata = test_pca)
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_pca <- rsq(test_pca$LogSalePrice, predictions_pca)
+mae_pca <- mae(exp(test_pca$LogSalePrice), exp(predictions_pca))
+rmse_pca <- rmse(exp(test_pca$LogSalePrice), exp(predictions_pca))
+
+paste('OSR^2:', rsq_pca, 'MAE:', mae_pca, 'RMSE:', rmse_pca)
+
+
+
+
+```
+
+
+# Ridge Regression
+
+```{r}
+
+lambdas <- 10^seq(7, -8, by = -.1)
+cv_fit <- cv.glmnet(as.matrix(subset(train_poly, select = -LogSalePrice)), train_poly$LogSalePrice, alpha = 0)
+opt_lambda <- cv_fit$lambda.min
+
+best_model <- glmnet(as.matrix(subset(train_poly, select = -LogSalePrice)), train_poly$LogSalePrice, alpha = 0, lambda = opt_lambda)
+
+plot(cv_fit)
+
+
+ridgepred <- predict(best_model,  newx = as.matrix(subset(test_poly, select = -LogSalePrice)))
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_ridge <- rsq(test_poly$LogSalePrice, ridgepred)
+mae_ridge <- mae(exp(test_poly$LogSalePrice), exp(ridgepred))
+rmse_ridge <- rmse(exp(test_poly$LogSalePrice), exp(ridgepred))
+
+paste('OSR^2:', rsq_ridge, 'MAE:', mae_ridge, 'RMSE:', rmse_ridge)
+
+
+```
+
+# Lasso
+
+```{r}
+
+# Setting alpha = 1 implements lasso regression
+lasso_reg <- cv.glmnet(as.matrix(subset(train_poly, select = -LogSalePrice)), train_poly$LogSalePrice, alpha = 1, lambda = lambdas, standardize = TRUE, nfolds = 10)
+
+# Best 
+lambda_best <- lasso_reg$lambda.min 
+
+lasso_model <- glmnet(as.matrix(subset(train_poly, select = -LogSalePrice)), train_poly$LogSalePrice, alpha = 1, lambda = lambda_best+0.00106, standardize = TRUE)
+
+#coef(lasso_model)
+
+lasso_pred <- predict(lasso_model,  newx = as.matrix(subset(test_poly, select = -LogSalePrice)))
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_lasso <- rsq(test_poly$LogSalePrice, lasso_pred)
+mae_lasso <- mae(exp(test_poly$LogSalePrice), exp(lasso_pred))
+rmse_lasso <- rmse(exp(test_poly$LogSalePrice), exp(lasso_pred))
+
+paste('OSR^2:', rsq_lasso, 'MAE:', mae_lasso, 'RMSE:', rmse_lasso)
+length(which(lasso_model$beta!=0))
+
+```
+
+# Diagnostics
+
+```{r}
+
+## Residual analysis
+#lasso_residuals <- test_poly$LogSalePrice - lasso_pred
+#plot(lasso_pred, lasso_residuals, xlab = "Predicted Values", ylab = "Residuals", main = "Lasso Residuals vs. Predicted Values")
+#abline(h = 0, col = "red")
+#
+## Homoscedasticity
+#plot(lasso_pred, lasso_residuals, xlab = "Predicted Values", ylab = "Residuals", main = "Lasso Residuals vs. Predicted Values")
+#abline(h = 0, col = "red")
+
+# Normality of residuals
+##hist(lasso_residuals, main = "Histogram of Residuals")
+#qqnorm(lasso_residuals)
+#qqline(lasso_residuals)
+
+# Calculate the standardized residuals
+#lasso_residuals <- lasso_residuals / sd(lasso_residuals)
+#
+## Create a scale-location plot
+#plot(sqrt(abs(lasso_pred)), lasso_residuals, xlab = "Fitted Values (sqrt(|Predicted Values|))", ylab = "Standardized #Residuals", main = "Standardized Residuals vs. Fitted Values (Scale-Location Plot)")
+#abline(h = 0, col = "red")
+
+#par(mfrow=c(4,4))
+#plot(model_full)
+
+
+
+
+
+
+
+```
+
+# Feature Importance
+
+```{r}
+
+imp <- as.data.frame(varImp(model_full))
+imp <- data.frame(overall = imp$Overall,
+           names   = rownames(imp))
+#imp[order(imp$overall,decreasing = T),]
+
+
+#Most important features according to full model: Roof material, 1st floor SF, overall quality & condition, 2nd floor SF, Shed, Garage, GrnHill
+
+# How about for lasso?
+length(which(lasso_model$beta!=0))
+
+keep_variables = rownames(lasso_model$beta)[c(which(lasso_model$beta!=0))]
+
+
+
+
+
+importance <- lasso_model$beta[c(which(abs(lasso_model$beta)>0.08))]
+name <- rownames(lasso_model$beta)[c(which(abs(lasso_model$beta)>0.08))]
+
+dflasso <- data.frame(name,importance)
+
+# Plot a bar plot of feature importance
+ggplot(dflasso, aes(x=name, y=importance)) +
+  geom_bar(stat="identity", fill="#ADD8E6") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  xlab("Feature") +
+  ylab("Coefficient")
+
+#kept 181 features. 
+# Most important: overall qual and cond, basement full bath, full bath, half bath, bedrooms above grade, MS.Zoning_C (all), fireplaces, MS.Zoning_RM, Lot.Shape_IR2, Lot.Shape_IR3, Land contour HLS, misc value 17000, pool quality good,
+# neighborhood good: grn hill, crawford, 
+# neighborhood bad: NridgHt, noRidge, MeadowV
+
+# Ridge? only got rid of 12 features
+length(which(best_model$beta!=0))
+```
+
+
+
+# XGBoost
+
+
+```{r}
+# Load required libraries
+library(xgboost)
+library(caTools)
+# Split the data into training, valid and testing sets
+
+train_poly_xgb = train_poly[keep_variables]
+test_poly_xgb = test_poly[keep_variables]
+train_poly_xgb$LogSalePrice = train_poly$LogSalePrice
+test_poly_xgb$LogSalePrice = test_poly$LogSalePrice
+
+
+split <- sample.split(train_poly_xgb, SplitRatio = 0.7)
+train_poly1 <- train_poly_xgb[split == TRUE,]
+valid_poly <- train_poly_xgb[split == FALSE,]
+
+
+# Prepare the data for XGBoost
+train_matrix <- xgb.DMatrix(data = as.matrix(subset(train_poly1, select = -LogSalePrice)), label = train_poly1$LogSalePrice)
+test_matrix <- xgb.DMatrix(data = as.matrix(subset(test_poly_xgb, select = -LogSalePrice)), label = test_poly_xgb$LogSalePrice)
+valid_matrix <- xgb.DMatrix(data = as.matrix(subset(valid_poly, select = -LogSalePrice)), label = valid_poly$LogSalePrice)
+
+
+
+# Set the hyperparameters
+params <- list(
+  booster = "gbtree",
+  objective = "reg:squarederror",
+  eval_metric = "rmse",
+  eta = 0.1,
+  max_depth = 6,
+  subsample = 0.7,
+  colsample_bytree = 0.7,
+  min_child_weight = 1,
+  seed = 123
+)
+
+# Train the model
+xgb_model <- xgb.train(
+  params = params,
+  data = train_matrix,
+  nrounds = 1000,
+  early_stopping_rounds = 10,
+  verbose = FALSE,
+  watchlist = list(train = train_matrix, test = valid_matrix)
+)
+
+# Make predictions on the test set
+xgb_pred <- predict(xgb_model, newdata = test_matrix)
+
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_xgb <- rsq(test_poly$LogSalePrice, xgb_pred)
+mae_xgb <- mae(exp(test_poly$LogSalePrice), exp(xgb_pred))
+rmse_xgb <- rmse(exp(test_poly$LogSalePrice), exp(xgb_pred))
+
+paste('OSR^2:', rsq_xgb, 'MAE:', mae_xgb, 'RMSE:', rmse_xgb)
+
+
+
+xgb_varImp <- xgb.importance(model = xgb_model)
+
+xgb_varImp
+
+xgb.plot.importance(xgb_varImp, top_n = 15, rel_to_first = T, col = '#ADD8E6')
+
+```
+
+
+# combine best models 
+
+```{r}
+
+# Find best weights
+
+# Define the possible weights to try
+weights <- seq(0, 1, by = 0.05)
+
+# Initialize the minimum MAE and best weights
+min_mae <- Inf
+best_weights <- c()
+
+# Loop through all possible combinations of weights
+for (w1 in weights) {
+  for (w2 in weights) {
+    # Check that the weights add up to 1
+    if (w1 + w2 == 1) {
+      # Calculate the weighted average predictions
+      weighted_avg_pred <- w1 * lasso_pred + w2 * xgb_pred
+      
+      # Calculate the MAE
+      model_mae <- mae(exp(test_poly$LogSalePrice), exp(weighted_avg_pred))
+      
+      # Check if this is the best MAE so far
+      if (model_mae < min_mae) {
+        min_mae <- model_mae
+        best_weights <- c(w1, w2)
+      }
+    }
+  }
+}
+
+# Print the best weights and the minimum MAE
+cat("Best weights:", best_weights, "\n")
+cat("Minimum MAE:", min_mae, "\n")
+
+weighted_avg_pred <- (0.4* lasso_pred) + (0.6 * xgb_pred)
+
+# Calculate R^2, MAE, and RMSE for LogSalePrice
+rsq_meta <- rsq(test_poly$LogSalePrice, weighted_avg_pred)
+mae_meta <- mae(exp(test_poly$LogSalePrice), exp(weighted_avg_pred))
+rmse_meta <- rmse(exp(test_poly$LogSalePrice), exp(weighted_avg_pred))
+
+paste('OSR^2:', rsq_meta, 'MAE:', mae_meta, 'RMSE:', rmse_meta)
+
+
+
+```
+
+# Results
+
+```{r}
+
+# create a list of model names and results
+model_names <- c("Intuition Model", "Full Linear Model", "+ Interactions", "+ Polynomials", "Ridge", "Lasso", "PCR", "XGBoost", "Weighted Average")
+rsquared <- c(rsq_int, rsq_full, rsq_interact, rsq_full_poly, rsq_ridge, rsq_lasso, rsq_pca, rsq_xgb, rsq_meta)
+mae <- c(mae_int, mae_full, mae_interact, mae_full_poly, mae_ridge, mae_lasso, mae_pca, mae_xgb, mae_meta)
+rmse <- c(rmse_int, rmse_full, rmse_interact, rmse_full_poly, rmse_ridge, rmse_lasso, rmse_pca, rmse_xgb, rmse_meta)
+
+# create a data frame to store the results
+results <- data.frame(Model=model_names, R_Squared =rsquared, MAE=mae, RMSE =rmse)
+
+results <- rename(results, 'MAE in $' = MAE, 'RMSE in $' = RMSE)
+# print the table using the kable function from the knitr package
+library(knitr)
+kable(results, digits = c(2,5,2), align = c("l", "c", "c", "r"), format = 'markdown')
+
+
+
+```
+
+
+
+
+
